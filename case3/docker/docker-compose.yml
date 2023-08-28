@@ -1,0 +1,208 @@
+version: '3'
+
+services:
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    volumes:
+      - ./docker_extra/volumes/hdfs/namenode:/hadoop/dfs/name
+      - ./docker_extra/volumes/hdfs/namenode/hdfs_tmp:/tmp/hdfs_tmp
+    env_file:
+      - ./docker_extra/conf/hadoop.env
+    ports:
+      - 9870:9870
+      - 9000:9000 # to conenct with jupyter/pypsark as default FS
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    volumes:
+      - ./docker_extra/volumes/hdfs/datanode:/hadoop/dfs/data
+    env_file:
+      - ./docker_extra/conf/hadoop.env
+    depends_on:
+      - namenode
+    ports:
+      - 9864:9864
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    env_file:
+      - ./docker_extra/conf/hadoop-hive.env
+    depends_on:
+      - hive-metastore
+    ports:
+      - "10000:10000"
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore
+    env_file:
+      - ./docker_extra/conf/hadoop-hive.env
+    command: /opt/hive/bin/hive --service metastore
+    depends_on:
+      - namenode
+      - datanode
+      - hive-metastore-postgresql
+    ports:
+      - "9083:9083"
+
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: hive-metastore-postgresql
+
+  spark-jupyter:
+    build:
+      context: ./docker_extra/conf/
+      dockerfile: Dockerfile-jupyter
+    ports:
+      - 7777:8888
+    command: "start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''"
+    volumes:
+      - ../main/notebooks:/home/jovyan/work/
+
+  hue:
+    image: gethue/hue:20221215-140101
+    depends_on:
+      - hive-metastore-postgresql
+    ports:
+      - 8888:8888
+    volumes:
+      - ./docker_extra/conf/hue.ini:/usr/share/hue/desktop/conf/hue-overrides.ini
+
+  # x-airflow-common: &airflow-common
+  #   build:
+  #     context: ./docker_extra/conf/
+  #     dockerfile: Dockerfile-ariflow
+  #   user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}"
+  #   env_file:
+  #     - ./docker_extra/conf/airflow.env
+  #   volumes:
+  #     - ../main/dags:/opt/airflow/dags
+  #     - ../main/dags/spark:/opt/airflow/dags/spark
+  #     - ./docker_extra/volumes/airflow_logs:/opt/airflow/logs
+  #   depends_on: &airflow-common-depends-on
+  #     postgres:
+  #       condition: service_healthy
+
+  # airflow-webserver:
+  #   <<: *airflow-common
+  #   command: webserver
+  #   container_name: airflow-webserver
+  #   ports:
+  #     - 8080:8080
+  #   healthcheck:
+  #     test:
+  #       [
+  #         "CMD",
+  #         "curl",
+  #         "--fail",
+  #         "http://localhost:8080/health"
+  #       ]
+  #     interval: 10s
+  #     timeout: 10s
+  #     retries: 5
+  #   restart: always
+  #   depends_on:
+  #     <<: *airflow-common-depends-on
+  #     airflow-init:
+  #       condition: service_completed_successfully
+
+  # airflow-scheduler:
+  #   <<: *airflow-common
+  #   command: scheduler
+  #   restart: on-failure
+  #   depends_on:
+  #     <<: *airflow-common-depends-on
+  #     airflow-init:
+  #       condition: service_completed_successfully
+
+  # airflow-init:
+  #   <<: *airflow-common
+  #   container_name: airflow-init
+  #   command: version
+  #   depends_on:
+  #     <<: *airflow-common-depends-on
+
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./docker_extra/conf/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "airflow" ]
+      interval: 5s
+      retries: 5
+    restart: always
+
+volumes:
+  postgres:
+
+    # resourcemanager:
+    #   image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    #   container_name: resourcemanager
+    #   restart: always
+    #   environment:
+    #     SERVICE_PRECONDITION: "namenode:9000 datanode:9864"
+    #   env_file:
+    #     - ./docker_extra/conf/hadoop.env
+    #   ports:
+    #     - 8088:8088
+
+    # nodemanager:
+    #   image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    #   container_name: nodemanager
+    #   restart: always
+    #   environment:
+    #     SERVICE_PRECONDITION: "namenode:9000 datanode:9864 resourcemanager:8088"
+    #   env_file:
+    #     - ./docker_extra/conf/hadoop.env
+    #   ports:
+    #     - 8042:8042
+
+    # historyserver:
+    #   image: bde2020/hadoop-historyserver:2.0.0-hadoop3.2.1-java8
+    #   container_name: historyserver
+    #   restart: always
+    #   environment:
+    #     SERVICE_PRECONDITION: "namenode:9000 datanode:9864 resourcemanager:8088"
+    #   env_file:
+    #     - ./docker_extra/conf/hadoop.env
+    #   ports:
+    #     - 8188:8188
+
+    # spark-master:
+    #   image: bde2020/spark-master:3.1.1-hadoop3.2
+    #   container_name: spark-master
+    #   hostname: spark-master
+    #   depends_on:
+    #     - namenode
+    #     - datanode
+    #   ports:
+    #     - "8082:8080"
+    #     - "7077:7077"
+    #   environment:
+    #     - INIT_DAEMON_STEP=setup_spark
+    #     - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    #   env_file:
+    #     - ./docker_extra/conf/hadoop-hive.env
+
+    # spark-worker:
+    #   image: bde2020/spark-worker:3.1.1-hadoop3.2
+    #   container_name: spark-worker
+    #   depends_on:
+    #     - spark-master
+    #   ports:
+    #     - 8081:8081
+    #   environment:
+    #     - SPARK_MASTER=spark://spark-master:7077
+    #     - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    #   env_file:
+    #     - ./docker_extra/conf/hadoop-hive.env

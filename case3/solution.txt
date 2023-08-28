@@ -1,0 +1,73 @@
+Created some fake test data based on the data provided in the Archive folder.
+
+cd case3/docker
+docker-compose up -d
+
+hue -> http://localhost:8888/
+jupyter -> http://localhost:7777/lab/tree/work/
+also hive and hdfs are running in the background
+
+1) Open hue, create tables: 
+create database if not exists netwrok_cells_land;
+create external table if not exists netwrok_cells_land.gsm (`year` STRING, `month` STRING, `day` STRING, `cell_identity` STRING, `frequency_band` STRING, `site_id` STRING) ROW FORMAT DELIMITED FIELDS TERMINATED BY ';' STORED AS TEXTFILE TBLPROPERTIES ("skip.header.line.count"="1");
+create table if not exists netwrok_cells.gsm (`year` STRING, `month` STRING, `day` STRING, `cell_identity` STRING, `frequency_band` STRING, `site_id` STRING) partitioned by (dt STRING) stored as parquet;
+
+create external table if not exists netwrok_cells_land.lte (`year` STRING, `month` STRING, `day` STRING, `cell_identity` STRING, `frequency_band` STRING, `site_id` STRING) ROW FORMAT DELIMITED FIELDS TERMINATED BY ';' STORED AS TEXTFILE TBLPROPERTIES ("skip.header.line.count"="1");
+create table if not exists netwrok_cells.lte (`year` STRING, `month` STRING, `day` STRING, `cell_identity` STRING, `frequency_band` STRING, `site_id` STRING) partitioned by (dt STRING) stored as parquet;
+
+create external table if not exists netwrok_cells_land.umts (`year` STRING, `month` STRING, `day` STRING, `cell_identity` STRING, `frequency_band` STRING, `site_id` STRING) ROW FORMAT DELIMITED FIELDS TERMINATED BY ';' STORED AS TEXTFILE TBLPROPERTIES ("skip.header.line.count"="1");
+create table if not exists netwrok_cells.umts (`year` STRING, `month` STRING, `day` STRING, `cell_identity` STRING, `frequency_band` STRING, `site_id` STRING) partitioned by (dt STRING) stored as parquet;
+
+create external table if not exists netwrok_cells_land.site (`year` STRING, `month` STRING, `day` STRING, `site_id` STRING) ROW FORMAT DELIMITED FIELDS TERMINATED BY ';' STORED AS TEXTFILE TBLPROPERTIES ("skip.header.line.count"="1");
+create table if not exists netwrok_cells.site (`year` STRING, `month` STRING, `day` STRING, `site_id` STRING) partitioned by (dt STRING) stored as parquet;
+
+create external table if not exists netwrok_cells.dim__cell_tech (cell_tech STRING, frequency_band STRING) ROW FORMAT DELIMITED FIELDS TERMINATED BY ';' STORED AS TEXTFILE;
+
+2) place any files you want to put into hdfs into ./d_task/case3/docker/docker_extra/volumes/hdfs/namenode/hdfs_tmp (some files already there)
+
+3) go to namenode terminal, run 
+hdfs dfs -put -f /tmp/hdfs_tmp/gsm.csv /user/hive/warehouse/netwrok_cells_land.db/gsm &
+hdfs dfs -put -f /tmp/hdfs_tmp/lte.csv /user/hive/warehouse/netwrok_cells_land.db/lte &
+hdfs dfs -put -f /tmp/hdfs_tmp/umts.csv /user/hive/warehouse/netwrok_cells_land.db/umts &
+hdfs dfs -put -f /tmp/hdfs_tmp/site.csv /user/hive/warehouse/netwrok_cells_land.db/site &
+hdfs dfs -put -f /tmp/hdfs_tmp/cells_tech.csv /user/hive/warehouse/netwrok_cells.db/dim__cell_tech
+
+4) write from land table to main tables in hue
+set hive.exec.dynamic.partition.mode=nonstrict;
+INSERT OVERWRITE TABLE netwrok_cells.gsm partition (dt)
+SELECT  *, concat_ws("-", `year`, `month`,`day`) as dt FROM netwrok_cells_land.gsm;
+INSERT OVERWRITE TABLE netwrok_cells.lte partition (dt)
+SELECT  *, concat_ws("-", `year`, `month`,`day`) as dt FROM netwrok_cells_land.lte;
+INSERT OVERWRITE TABLE netwrok_cells.umts partition (dt)
+SELECT  *, concat_ws("-", `year`, `month`,`day`) as dt FROM netwrok_cells_land.umts;
+INSERT OVERWRITE TABLE netwrok_cells.site partition (dt)
+SELECT  *, concat_ws("-", `year`, `month`,`day`) as dt FROM netwrok_cells_land.site;
+
+
+5) in hue, create view, so we dont have to write it over and over
+create view if not exists netwrok_cells.cell_site as
+select g.cell_identity, g.frequency_band, g.site_id, "gsm" as cell_tech, g.dt from netwrok_cells.gsm g
+join netwrok_cells.site s on g.site_id = s.site_id and g.dt = s.dt 
+UNION ALL
+select l.cell_identity, l.frequency_band, l.site_id, "lte" as cell_tech, l.dt from netwrok_cells.lte l
+join netwrok_cells.site s on l.site_id = s.site_id and l.dt = s.dt 
+UNION ALL
+select u.cell_identity, u.frequency_band, u.site_id, "umts" as cell_tech, u.dt from netwrok_cells.umts u
+join netwrok_cells.site s on u.site_id = s.site_id and u.dt = s.dt 
+
+
+TASK 1) If we dont have many cell_tech's and site_ids, this is the only way I found to perform something like this in hive, because I didnt find how to transpose/pivot data
+
+with counted as (
+    select count(*) as cell_count, site_id, cell_tech, dt  from netwrok_cells.cell_site
+    group by dt, site_id, cell_tech
+    order by dt, site_id, cell_tech
+    )
+select 
+    max(case when site_id='3' and cell_tech = 'gsm' then cell_count else 0 end) as 3_gsm_count,
+    max(case when site_id='3' and cell_tech = 'lte' then cell_count else 0 end) as 3_lte_count,
+    max(case when site_id='3' and cell_tech = 'umts' then cell_count else 0 end) as 3_umts_count,
+    dt
+from counted group by dt
+
+Otherwise, both solutions are done in spark in main/notebooks

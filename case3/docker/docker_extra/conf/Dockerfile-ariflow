@@ -1,0 +1,18 @@
+FROM apache/airflow:latest-python3.7
+
+USER root
+RUN apt-get update && apt-get install -y openjdk-11-jre
+RUN curl -O https://archive.apache.org/dist/spark/spark-3.1.1/spark-3.1.1-bin-hadoop3.2.tgz
+RUN tar -xzf spark-3.1.1-bin-hadoop3.2.tgz
+RUN mv spark-3.1.1-bin-hadoop3.2 /opt/spark
+
+
+USER airflow
+ENV SPARK_HOME=/opt/spark
+ENV PATH=$PATH:$SPARK_HOME/bin
+RUN export SPARK_HOME
+RUN /usr/local/bin/python -m pip install --upgrade pip
+RUN pip install --no-cache-dir apache-airflow-providers-apache-spark
+
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64/
+RUN export JAVA_HOME
